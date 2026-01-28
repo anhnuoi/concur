@@ -1,0 +1,1246 @@
+Getting the Maximum
+from Executors
+In Chapter 2, Managing Lots of Threads – Executors, we introduced the basic
+characteristics of executors as a way to improve the performance of concurrent
+applications that execute lots of concurrent tasks. In this chapter, we go a step further
+and explain advanced characteristics of executors that make them a powerful tool for
+your concurrent application. In this chapter, we will cover the following:
+• Advanced characteristics of executors
+• First example – an advanced server application
+• Second example – executing periodic tasks
+• Additional information about executors
+Advanced characteristics of executors
+An executor is a class that allows the programmers to execute concurrent tasks
+without being worried about the creation and management of threads. Programmers
+create Runnable objects and send them to the executor that creates and manages
+the necessary threads to execute those tasks. In Chapter 2, Managing Lots of Threads –
+Executors, we introduced the basic characteristics of the executor framework:
+• How to create an executor and the different options we have when we
+create one
+• How to send a concurrent task to an executor
+• How to control the resources used by the executor
+• How the executor, internally, uses a pool of threads to optimize the
+performance of the application
+Getting the Maximum from Executors
+[ 68 ]
+However, executors can give you many more options to make them a powerful
+mechanism in your concurrent application.
+Cancellation of tasks
+You can cancel the execution of a task after you send it to an executor. When you
+send a Runnable object to an executor using the submit() method, it returns
+an implementation of the Future interface. This class allows you to control the
+execution of the task. It has the cancel() method, which attempts to cancel the
+execution of the task. It receives a boolean value as a parameter. If it takes the true
+value and the executor is executing this task, the thread executing the task will
+be interrupted.
+These are the situations when the task you want to cancel can't be canceled:
+• The task has already been canceled
+• The task has finished its execution
+• The task is running and you supplied false as a parameter to the
+cancel() method
+• Other reasons not specified in the API documentation
+The cancel() method returns a boolean value to indicate whether the task has been
+canceled or not.
+Scheduling the execution of tasks
+The ThreadPoolExecutor class is the basic implementation of the Executor
+and ExecutorService interfaces. But the Java concurrency API provides
+an extension of this class to allow the execution of scheduled tasks. It's the
+ScheduledThreadPoolExeuctor class, and you can:
+• Execute a task after a delay
+• Execute a task periodically; this includes the execution of tasks at a fixed rate
+or with a fixed delay
+Chapter 3
+[ 69 ]
+Overriding the executor methods
+The executor framework is a very flexible mechanism. You can implement your
+own executor extending one of the existing classes (ThreadPoolExecutor or
+ScheduledThreadPoolExecutor) to get the desired behavior. These classes include
+methods that make it easy to change how the executor works. If you override
+ThreadPoolExecutor, you can override the following methods:
+• beforeExecute(): This method is invoked before the execution of a
+concurrent task in an executor. It receives the Runnable object that is going
+to be executed and the Thread object that will execute them. The Runnable
+object that this method receives is an instance of the FutureTask class and
+not the Runnable object you sent to the executor using the submit() method.
+• afterExecute(): This method is invoked after the execution of a concurrent
+task in the executor. It receives the Runnable object that has been executed
+and a Throwable object that stores a possible exception thrown inside the
+task. As in the beforeExecute() method, the Runnable object is an instance
+of the FutureTask class.
+• newTaskFor(): This method creates the task that is going to execute the
+Runnable object you sent using the submit() method. It must return an
+implementation of the RunnableFuture interface. By default, Open JDK
+8 and Oracle JDK 8 returns an instance of the FutureTask class, but this
+circumstance can change in future implementations.
+If you extend the ScheduledThreadPoolExecutor class, you can override the
+decorateTask() method. This method is like the newTaskFor() for the scheduled
+tasks. It allows you to override the tasks executed by the executor.
+Changing some initialization parameters
+You can also change the behavior of an executor by changing some parameters at its
+creation. The most useful ones are:
+• BlockingQueue<Runnable>: Every executor uses an internal BlockingQueue
+to store the tasks that are waiting for its execution. You can pass any
+implementation of this interface as a parameter. For example, you can change
+the default order used by the executor to execute the tasks.
+• ThreadFactory: You can specify an implementation of the ThreadFactory
+interface, and the executor will use that factory to create the threads that will
+execute the tasks. For example, you can use a ThreadFactory interface to
+create an extension of the Thread class that saves log information about the
+execution times of the tasks.
+Getting the Maximum from Executors
+[ 70 ]
+• RejectedExecutionHandler: After you call the shutdown()
+or the shutdownNow() method, all the tasks that are sent to the
+executor will be rejected. You can specify an implementation of the
+RejectedExecutionHandler interface to manage this situation.
+The first example – an advanced server
+application
+In Chapter 2, Managing Lots of Threads – Executors, we presented an example of a
+client/server application. We implemented a server to search data over the World
+Development Indicators of the World Bank and a client that makes multiple calls to
+that server to test the performance of the executor.
+In this section, we will extend that example to add to it the following characteristics:
+• You can cancel the execution of queries in the server, using a new
+cancellation query.
+• You can control the order of execution of queries using a priority parameter.
+Tasks with higher priority will be executed first.
+• The server will calculate the number of tasks and the total execution time
+used by the different users that use the server.
+To implement these new characteristics, we have made the following changes to
+the server:
+• We have added two parameters to every query. The first one is the name
+of the user that sends the query, and the other is the priority of the query.
+The new format of the queries are as follows:
+° Query: q;username;priority;codCountry;codIndicator;year
+where username is the name of the user, priority is the priority of
+the query, codCountry is the code of the country, codIndicator is
+the code of the indicator, and year is an optional parameter with the
+year you want to query.
+° Report: r;username;priority;codIndicator where username
+is the name of the user, priority is the priority of the query, and
+codIndicator is the code of the indicator you want to report.
+° Status: s;username;priority where username is the name of the
+user and priority is the priority of the query.
+° Stop: z;username;priority where username is the name of the
+user, and priority is the priority of the query.
+Chapter 3
+[ 71 ]
+• We have implemented a new query:
+° Cancel: c;username;priority where username is the name of the
+user, and priority is the priority of the query.
+• We have implemented our own executor to:
+° Calculate the server use per user
+° Execute the tasks by priority
+° Control the rejection of tasks
+° We have adapted ConcurrentServer and RequestTask to take into
+account the new elements of the server
+The rest of the elements of the server (the cache system, the log system, and the DAO
+class) are the same, so it won't be described again.
+The ServerExecutor class
+As we mentioned earlier, we have implemented our own executor to execute the
+tasks of the server. We also have implemented some additional but necessary classes
+to provide all the functionality. Let's describe these classes.
+The statistics object
+Our server will calculate the number of tasks that every user executes on it and the
+total execution time of these tasks. To store this data, we have implemented the
+ExecutorStatistics class. It has two attributes to store the information:
+public class ExecutorStatistics {
+ private AtomicLong executionTime = new AtomicLong(0L);
+ private AtomicInteger numTasks = new AtomicInteger(0);
+These attributes are AtomicVariables that support atomic operations on single
+variables. This allows you to use those variables in different threads without using
+any synchronization mechanisms. Then, it has two methods to increment the number
+of tasks and the execution time:
+ public void addExecutionTime(long time) {
+ executionTime.addAndGet(time);
+ }
+ public void addTask() {
+ numTasks.incrementAndGet();
+ }
+Getting the Maximum from Executors
+[ 72 ]
+Finally, we have added methods to get the value of both attributes, and we have
+overridden the toString() method to get the information in a readable way:
+ @Override
+ public String toString() {
+ return "Executed Tasks: "+getNumTasks()+". Execution Time:
+ "+getExecutionTime();
+ }
+The rejected task controller
+When you create an executor, you can specify a class to manage its rejected tasks.
+A task is rejected by the executor when you submit it after the shutdown() or
+shutdownNow() methods has been invoked in the executor.
+To control this circumstance, we have implemented the RejectedTaskController
+class. This class implements the RejectedExecutionHandler interface and
+implements the rejectedExecution() method:
+public class RejectedTaskController implements
+ RejectedExecutionHandler {
+ @Override
+ public void rejectedExecution(Runnable task,
+ ThreadPoolExecutor executor) {
+ ConcurrentCommand command=(ConcurrentCommand)task;
+ Socket clientSocket=command.getSocket();
+ try {
+ PrintWriter out = new
+ PrintWriter(clientSocket.getOutputStream(),true);
+ String message="The server is shutting down."
+ +" Your request can not be served."
+ +" Shutting Down: "
+ +String.valueOf(executor.isShutdown())
+ +". Terminated: "
+ +String.valueOf(executor.isTerminated())
+ +". Terminating: "
+ +String.valueOf(executor.isTerminating());
+ out.println(message);
+ out.close();
+ clientSocket.close();
+ } catch (IOException e) {
+ e.printStackTrace();
+ }
+ }
+Chapter 3
+[ 73 ]
+The rejectedExecution() method is called once per task that is rejected and
+receives as parameters the task that has been rejected and the executor that has
+rejected the task.
+The executor tasks
+When you submit a Runnable object to an executor, it doesn't execute that Runnable
+object directly. It creates a new object, an instance of the FutureTask class, and it's
+this task that is executed by the worker thread of the executor.
+In our case, to measure the execution time of the tasks, we have implemented
+our own FutureTask implementation in the ServerTask class. It extends the
+FutureTask class and implements the Comparable interface as follows:
+public class ServerTask<V> extends FutureTask<V> implements
+ Comparable<ServerTask<V>>{
+Internally, it stores the query that is going to execute as a ConcurrentCommand object:
+ private ConcurrentCommand command;
+In the constructor, it uses the constructor of the FutureTask class and stores the
+ConcurrentCommand object:
+ public ServerTask(ConcurrentCommand command) {
+ super(command, null);
+ this.command=command;
+ }
+ public ConcurrentCommand getCommand() {
+ return command;
+ }
+ public void setCommand(ConcurrentCommand command) {
+ this.command = command;
+ }
+Finally, it implements the compareTo() operation comparing the commands stored
+by the two ServerTask instances to compare. This can be seen in the following code:
+ @Override
+ public int compareTo(ServerTask<V> other) {
+ return command.compareTo(other.getCommand());
+ }
+Getting the Maximum from Executors
+[ 74 ]
+The executor
+Now that we have the auxiliary classes of the executor, we have to implement the
+executor itself. We have implemented the ServerExecutor class with this purpose. It
+extends the ThreadPoolExecutor class and has some internal attributes, as follows:
+• startTimes: This is a ConcurrentHashMap to store the start date of every
+task. The key of the class will be the ServerTask object (a Runnable object),
+and the value will be a Date object.
+• executionStatistics: This is a ConcurrentHashMap to store the statistics
+of use per user. The key will be the username and the value will be a
+ExecutorStatistics object.
+• CORE_POOL_SIZE, MAXIMUM_POOL_SIZE, and KEEP_ALIVE_TIME: These are
+constants to define the characteristics of the executor.
+• REJECTED_TASK_CONTROLLER: This is a RejectedTaskController class
+attribute to control the tasks rejected by the executor.
+This can be explained by the following code:
+public class ServerExecutor extends ThreadPoolExecutor {
+ private ConcurrentHashMap<Runnable, Date> startTimes;
+ private ConcurrentHashMap<String, ExecutorStatistics>
+ executionStatistics;
+ private static int CORE_POOL_SIZE =
+ Runtime.getRuntime().availableProcessors();
+ private static int MAXIMUM_POOL_SIZE =
+ Runtime.getRuntime().availableProcessors();
+ private static long KEEP_ALIVE_TIME = 10;
+ private static RejectedTaskController REJECTED_TASK_CONTROLLER
+ = new RejectedTaskController();
+ public ServerExecutor() {
+ super(CORE_POOL_SIZE, MAXIMUM_POOL_SIZE, KEEP_ALIVE_TIME,
+ TimeUnit.SECONDS, new PriorityBlockingQueue<>(),
+ REJECTED_TASK_CONTROLLER);
+ startTimes = new ConcurrentHashMap<>();
+ executionStatistics = new ConcurrentHashMap<>();
+ }
+Chapter 3
+[ 75 ]
+The constructor of the class calls to the parent constructor creating a
+PriorityBlockingQueue class to store the tasks that will be executed in the
+executor. This class orders the elements according to the result of the execution
+of the compareTo() method (so the elements stored in it have to implement the
+Comparable interface). The utilization of this class will allow us to execute our tasks
+by priority.
+Then, we have overridden some methods of the ThreadPoolExecutor class. First is
+the beforeExecute() method. This method is executed before the execution of every
+task. It receives the ServerTask object as a parameter, and the thread that is going
+to execute the task. In our case, we store the actual date in the ConcurrentHashMap
+with the start dates of every task, as follows:
+ protected void beforeExecute(Thread t, Runnable r) {
+ super.beforeExecute(t, r);
+ startTimes.put(r, new Date());
+ }
+The next method is the afterExecute() method. This method is executed after the
+execution of every task in the executor and receives the ServerTask object that has
+been executed as parameter and a Throwable object. This last parameter will have
+value only when an exception is thrown during the execution of the task. In our case,
+we will use this method to:
+• Calculate the execution time of the task.
+• Update the statistics of the user in the following manner:
+ @Override
+ protected void afterExecute(Runnable r, Throwable t) {
+ super.afterExecute(r, t);
+ ServerTask<?> task=(ServerTask<?>)r;
+ ConcurrentCommand command=task.getCommand();
+ if (t==null) {
+ if (!task.isCancelled()) {
+ Date startDate =
+ startTimes.remove(r);
+ Date endDate=new Date();
+ long executionTime= endDate.getTime() -
+ startDate.getTime();
+ ;
+ ExecutorStatistics statistics =
+ executionStatistics.computeIfAbsent
+ (command.getUsername(), n -> new
+ ExecutorStatistics());
+Getting the Maximum from Executors
+[ 76 ]
+ statistics.addExecutionTime(executionTime);
+ statistics.addTask();
+ ConcurrentServer.finishTask
+ (command.getUsername(), command);
+ }
+ else {
+ String message="The task"
+ + command.hashCode() + "of user"
+ + command.getUsername() + "has been
+ cancelled.";
+ Logger.sendMessage(message);
+ }
+ } else {
+ String message="The exception "
+ +t.getMessage()
+ +" has been thrown.";
+ Logger.sendMessage(message);
+ }
+ }
+Finally, we have overridden the newTaskFor() method. This method will be executed
+to convert the Runnable object that we send to the executor, using the submit()
+method in the instance of FutureTask that will be executed by the executor. In our
+case, we replace the default FutureTask class with our ServerTask object:
+ @Override
+ protected <T> RunnableFuture<T> newTaskFor(Runnable runnable,
+ T value) {
+ return new ServerTask<T>(runnable);
+ }
+We have included an additional method in the executor to write all the statistics
+stored in the executor in the log system. This method will be called at the end of the
+execution of the server, as you will see later. We have the following code:
+ public void writeStatistics() {
+ for(Entry<String, ExecutorStatistics> entry:
+ executionStatistics.entrySet()) {
+ String user = entry.getKey();
+ ExecutorStatistics stats = entry.getValue();
+ Logger.sendMessage(user+":"+stats);
+ }
+ }
+Chapter 3
+[ 77 ]
+The command classes
+The command classes execute the different queries you can send to the server.
+You can send five different queries to our server:
+• Query: This is to get information about a country, an indicator, and
+optionally a year. It's implemented by the ConcurrentQueryCommand class.
+• Report: This is to get information about an indicator. It's implemented by the
+ConcurrentReportCommand class.
+• Status: This is to get information about the status of a server. It's
+implemented by the ConcurrentStatusCommand class.
+• Cancel: This is to cancel the execution of the tasks of a user. It's implemented
+by the ConcurrentCancelCommand class.
+• Stop: This is to stop the execution of the server. It's implemented by the
+ConcurrentStopCommand class.
+We also have the ConcurrentErrorCommand class to manage the situation when an
+unknown command arrives at the server, and ConcurrentCommand that is the base
+class of all the commands.
+The ConcurrentCommand class
+This is the base class of every command. It includes the behavior common to all the
+commands that includes the following:
+• Call the method that implements the specific logic of every command
+• Write the results to the client
+• Close all the resources used in the communication
+The class extends the Command class and implements the Comparable and Runnable
+interfaces. In the example of Chapter 2, Managing Lots of Threads – Executors, the
+commands were simple classes, but in this example, the concurrent commands are
+Runnable objects that will be sent to the executor:
+public abstract class ConcurrentCommand extends Command implements
+ Comparable<ConcurrentCommand>, Runnable{
+It has three attributes:
+• username: This is to store the name of the user that sends the query.
+• priority: This is to store the priority of the query. It will determine the
+order of execution of the query.
+• socket: This is the socket used in the communication with the client.
+Getting the Maximum from Executors
+[ 78 ]
+The constructor of the class initializes these attributes:
+ private String username;
+ private byte priority;
+ private Socket socket;
+ public ConcurrentCommand(Socket socket, String[] command) {
+ super(command);
+ username=command[1];
+ priority=Byte.parseByte(command[2]);
+ this.socket=socket;
+ }
+The main functionality of this class is in the abstract execute() method, which will
+be implemented by every concrete command to calculate and return the results of
+the query, and in the run() method. The run() method calls the execute() method,
+stores the result in the cache, writes the result in the socket, and closes all the
+resources used in the communication. We have the following:
+ @Override
+ public abstract String execute();
+ @Override
+ public void run() {
+ String message="Running a Task: Username: "
+ +username
+ +"; Priority: "
+ +priority;
+ Logger.sendMessage(message);
+ String ret=execute();
+ ParallelCache cache = ConcurrentServer.getCache();
+ if (isCacheable()) {
+ cache.put(String.join(";",command), ret);
+ }
+ try {
+ PrintWriter out = new
+ PrintWriter(socket.getOutputStream(),true);
+ out.println(ret);
+Chapter 3
+[ 79 ]
+ socket.close();
+ } catch (IOException e) {
+ e.printStackTrace();
+ }
+ System.out.println(ret);
+ }
+Finally, the compareTo() method uses the priority attribute to determine the order of
+the tasks. This will be used by the PriorityBlockingQueue class to order the tasks,
+so the tasks with a higher priority will be executed first. Take into account that a task
+has higher priority when the getPriority() method returns a lower value. If the
+getPriority() of a task returns 1, that task will have a higher priority than a task
+that getPriority() method returns 2:
+ @Override
+ public int compareTo(ConcurrentCommand o) {
+ return Byte.compare(o.getPriority(), this.getPriority());
+ }
+Concrete commands
+We have made minor changes in the classes that implement the different commands,
+and we added a new one implemented by the ConcurrentCancelCommand class. The
+main logic of these classes is included in the execute() method that calculates the
+response to the query and returns it as a string.
+The execute() method of the new ConcurrentCancelCommand makes a call to the
+cancelTasks() method of the ConcurrentServer class. This method will stop the
+execution of all the pending tasks associated with the user passed as a parameter:
+ @Override
+ public String execute() {
+ ConcurrentServer.cancelTasks(getUsername());
+ String message = "Tasks of user "
+ +getUsername()
+ +" has been cancelled.";
+ Logger.sendMessage(message);
+ return message;
+ }
+Getting the Maximum from Executors
+[ 80 ]
+The execute() method of ConcurrentReportCommand uses the query() method
+of the WDIDAO class to get the data requested by the user. In Chapter 2, Managing
+Lots of Threads – Executors, you can find the implementation of this method. The
+implementation is almost the same. The only difference is command array
+indices as follows:
+ @Override
+ public String execute() {
+ WDIDAO dao=WDIDAO.getDAO();
+ if (command.length==5) {
+ return dao.query(command[3], command[4]);
+ } else if (command.length==6) {
+ try {
+ return dao.query(command[3], command[4],
+ Short.parseShort(command[5]));
+ } catch (NumberFormatException e) {
+ return "ERROR;Bad Command";
+ }
+ } else {
+ return "ERROR;Bad Command";
+ }
+ }
+The execute() method of ConcurrentQueryCommand uses the report() method
+of the WDIDAO class to get the data. In Chapter 2, Managing Lots of Threads – Executors,
+you also can find the implementation of this method. The implementation here is
+almost the same. The only difference is the command array index:
+ @Override
+ public String execute() {
+ WDIDAO dao=WDIDAO.getDAO();
+ return dao.report(command[3]);
+ }
+ConcurrentStatusCommand has an additional parameter in its constructor: the
+Executor object, which will execute the commands. This command uses this object
+to obtain information about the executor and send it as a response to the user.
+The implementation is almost the same as in Chapter 2, Managing Lots of Threads –
+Executors. We have used the same methods to get the status of the Executor object.
+Chapter 3
+[ 81 ]
+The ConcurrentStopCommand and ConcurrentErrorCommand are also the same
+as in Chapter 2, Managing Lots of Threads – Executors, so we haven't included their
+source code.
+The server part
+The server part receives the queries from the clients of the server and creates the
+command classes that executes the queries and sends them to the executor. It is
+implemented by two classes:
+• The ConcurrentServer class: It includes the main() method of the server
+and additional methods to cancel tasks and finish the execution of the system
+• The RequestTask class: This class creates the commands and sends them to
+the executor
+The main difference with the example of Chapter 2, Managing Lots of Threads –
+Executors is the role of the RequestTask class. In the SimpleServer example, the
+ConcurrentServer class creates a RequestTask object per query and sends them to
+the executor. In this example, we will only have an instance of the RequestTask that
+will be executed as a thread. When the ConcurrentServer receives a connection,
+it stores the socket to communicate with the client in a concurrent list of pending
+connections. The RequestTask thread reads that socket, processes the data sent
+by the client, creates the corresponding command, and sends the command to
+the executor.
+The main reason for this change is to leave in the tasks executed by the executor only
+the code of the queries and leave the preprocessed code outside the executor.
+The ConcurrentServer class
+The ConcurrentServer class needs some internal attributes to work properly:
+• A ParallelCache instance to use the cache system.
+• A ServerSocket instance to get the connections from the clients.
+• A boolean value to know when it has to stop its execution.
+• A LinkedBlockingQueue to store the sockets of the clients that
+sends a message to the server. These sockets will be processed by the
+RequestTask class.
+Getting the Maximum from Executors
+[ 82 ]
+• A ConcurrentHashMap to store the Future objects associated with every
+task executed in the executor. The key will be the username of the users
+that sends the queries, and the values will be another Map whose key will be
+the ConcurrenCommand objects, and the value will be the Future instance
+associated with that task. We use these Future instances to cancel the
+execution of tasks.
+• A RequestTask instance to create the commands and sends them to
+the executor.
+• A Thread object to execute the RequestTask object.
+The code for this is as follows:
+public class ConcurrentServer {
+ private static ParallelCache cache;
+ private static volatile boolean stopped=false;
+ private static LinkedBlockingQueue<Socket> pendingConnections;
+ private static ConcurrentMap<String,
+ ConcurrentMap<ConcurrentCommand, ServerTask<?>>>
+ taskController;
+ private static Thread requestThread;
+ private static RequestTask task;
+The main() method of this class initializes these objects and opens the ServerSocket
+instance to listen to the connections from the clients. In addition, it creates the
+RequestTask object and executes it as a thread. It will be in a loop until the
+shutdown() method changes the value of the stopped attribute. After this, it waits
+for the finalization of the Executor object, using the endTermination() method of
+the RequestTask object, and shuts down the Logger system and the RequestTask
+object with the finishServer() method:
+ public static void main(String[] args) {
+ WDIDAO dao=WDIDAO.getDAO();
+ cache=new ParallelCache();
+ Logger.initializeLog();
+ pendingConnections = new LinkedBlockingQueue<Socket>();
+ taskController = new ConcurrentHashMap<String,
+ ConcurrentHashMap<Integer, Future<?>>>();
+ task=new RequestTask(pendingConnections, taskController);
+ requestThread=new Thread(task);
+ requestThread.start();
+ System.out.println("Initialization completed.");
+Chapter 3
+[ 83 ]
+ serverSocket= new ServerSocket(Constants.CONCURRENT_PORT);
+ do {
+ try {
+ Socket clientSocket = serverSocket.accept();
+ pendingConnections.put(clientSocket);
+ } catch (Exception e) {
+ e.printStackTrace();
+ }
+ } while (!stopped);
+ finishServer();
+ System.out.println("Shutting down cache");
+ cache.shutdown();
+ System.out.println("Cache ok" + new Date());
+ }
+It includes two methods to shut down the executor of the server. The shutdown()
+method changes the value of the stopped variable and closes the serverSocket
+instance. The finishServer() method stops the executor, interrupts the thread that
+executes the RequestTask object, and shuts downs the Logger system. We divided
+this process into two parts to use the Logger system until the last instruction of
+the server:
+ public static void shutdown() {
+ stopped=true;
+ try {
+ serverSocket.close();
+ } catch (IOException e) {
+ e.printStackTrace();
+ }
+ }
+ private static void finishServer() {
+ System.out.println("Shutting down the server...");
+ task.shutdown();
+ System.out.println("Shutting down Request task");
+ requestThread.interrupt();
+ System.out.println("Request task ok");
+ System.out.println("Closing socket");
+ System.out.println("Shutting down logger");
+ Logger.sendMessage("Shutting down the logger");
+ Logger.shutdown();
+ System.out.println("Logger ok");
+ System.out.println("Main server thread ended");
+ }
+Getting the Maximum from Executors
+[ 84 ]
+The server includes the method that cancels the tasks associated with a user. As we
+mentioned before, the Server class uses a nested ConcurrentHashMap to store all the
+tasks associated with a user. First, we obtain the Map with all the tasks of a user and
+then we process all the Future objects of those tasks calling to the cancel() method
+of the Future objects. We pass the value true as a parameter, so if the executor is
+running a task from that user, it will be interrupted. We have included the necessary
+code to avoid the cancellation of ConcurrentCancelCommand:
+ public static void cancelTasks(String username) {
+ ConcurrentMap<ConcurrentCommand, ServerTask<?>> userTasks
+ = taskController.get(username);
+ if (userTasks == null) {
+ return;
+ }
+ int taskNumber = 0;
+ Iterator<ServerTask<?>> it =
+ userTasks.values().iterator();
+ while(it.hasNext()) {
+ ServerTask<?> task = it.next();
+ ConcurrentCommand command = task.getCommand();
+ if(!(command instanceof ConcurrentCancelCommand) &&
+ task.cancel(true)) {
+ taskNumber++;
+ Logger.sendMessage("Task with code
+ "+command.hashCode()+"cancelled:
+ "+command.getClass().getSimpleName());
+ it.remove();
+ }
+ }
+ String message=taskNumber+" tasks has been cancelled.";
+ Logger.sendMessage(message);
+ }
+Finally, we have included a method to eliminate the Future object associated
+with tasks from our nested map of ServerTask objects when that task finishes
+its execution normally. It's the finishTask() method:
+ public static void finishTask(String username,
+ ConcurrentCommand command) {
+ ConcurrentMap<ConcurrentCommand, ServerTask<?>> userTasks
+ = taskController.get(username);
+ userTasks.remove(command);
+Chapter 3
+[ 85 ]
+ String message = "Task with code "+command.hashCode()+"
+ has finished";
+ Logger.sendMessage(message);
+ }
+The RequestTask class
+The RequestTask class is the intermediary between the ConcurrentServer class,
+which connects to the clients, and the Executor class, which executes the concurrent
+tasks. It opens the socket with the client, reads the query data, creates the adequate
+command, and sends it to the executor.
+It uses some internal attributes:
+• A LinkedBlockingQueue where the ConcurrentServer class stores the
+client sockets
+• A ServerExecutor to execute the commands as concurrent tasks
+• A ConcurrentHashMap to store the Future objects associated with the tasks
+The constructor of the class initializes all these objects:
+public class RequestTask implements Runnable {
+ private LinkedBlockingQueue<Socket> pendingConnections;
+ private ServerExecutor executor = new ServerExecutor();
+ private ConcurrentMap<String, ConcurrentMap<ConcurrentCommand,
+ ServerTask<?>>> taskController;
+ public RequestTask(LinkedBlockingQueue<Socket>
+ pendingConnections, ConcurrentHashMap<String,
+ ConcurrentHashMap<Integer, Future<?>>> taskController) {
+ this.pendingConnections = pendingConnections;
+ this.taskController = taskController;
+ }
+The main method of this class is the run() method. It executes a loop until the thread
+is interrupted processing the sockets stored in the pendingConnections object. In
+this object, the ConcurrentServer class stores the sockets to communicate with
+the different clients that sends a query to the server. It opens the socket, reads the
+data, and creates the corresponding command. This also sends the command to the
+executor and stores the Future object in the double ConcurrentHashMap associated
+with the hashCode of the task and with the user that sent the query:
+ public void run() {
+ try {
+ while (!Thread.currentThread().interrupted()) {
+Getting the Maximum from Executors
+[ 86 ]
+ try {
+ Socket clientSocket =
+ pendingConnections.take();
+ BufferedReader in = new BufferedReader(new
+ InputStreamReader
+ (clientSocket.getInputStream()));
+ String line = in.readLine();
+ Logger.sendMessage(line);
+ ConcurrentCommand command;
+ ParallelCache cache =
+ ConcurrentServer.getCache();
+ String ret = cache.get(line);
+ if (ret == null) {
+ String[] commandData = line.split(";");
+ System.out.println("Command: " +
+ commandData[0]);
+ switch (commandData[0]) {
+ case "q":
+ System.out.println("Query");
+ command = new
+ ConcurrentQueryCommand(clientSocket,
+ commandData);
+ break;
+ case "r":
+ System.out.println("Report");
+ command = new
+ ConcurrentReportCommand
+ (clientSocket, commandData);
+ break;
+ case "s":
+ System.out.println("Status");
+ command = new
+ ConcurrentStatusCommand(executor,
+ clientSocket, commandData);
+ break;
+ case "z":
+ System.out.println("Stop");
+ command = new
+ ConcurrentStopCommand(clientSocket,
+ commandData);
+ break;
+Chapter 3
+[ 87 ]
+ case "c":
+ System.out.println("Cancel");
+ command = new
+ ConcurrentCancelCommand
+ (clientSocket, commandData);
+ break;
+ default:
+ System.out.println("Error");
+ command = new
+ ConcurrentErrorCommand(clientSocket,
+ commandData);
+ break;
+ }
+ ServerTask<?> controller =
+ (ServerTask<?>)executor.submit(command);
+ storeContoller(command.getUsername(),
+ controller, command);
+ } else {
+ PrintWriter out = new
+ PrintWriter
+ (clientSocket.getOutputStream(),true);
+ out.println(ret);
+ clientSocket.close();
+ }
+ } catch (IOException e) {
+ e.printStackTrace();
+ }
+ }
+ } catch (InterruptedException e) {
+ // No Action Required
+ }
+ }
+The storeController() method is the one that stores the Future object in the
+double ConcurrentHashMap:
+ private void storeContoller(String userName, ServerTask<?>
+ controller, ConcurrentCommand command) {
+ taskController.computeIfAbsent(userName, k -> new
+ ConcurrentHashMap<>()).put(command, controller);
+ }
+Getting the Maximum from Executors
+[ 88 ]
+Finally, we have included two methods to manage the execution of the Executor
+class, one to call the shutdown() method for the executor and an other to wait
+for its finalization. Remember that you must explicitly call the shutdown() or
+shutdownNow() methods to end the execution of an executor. If not, the program
+won't terminate. Look at the following code:
+ public void shutdown() {
+ String message="Request Task: "
+ +pendingConnections.size()
+ +" pending connections.";
+ Logger.sendMessage(message);
+ executor.shutdown();
+ }
+ public void terminate() {
+ try {
+ executor.awaitTermination(1,TimeUnit.DAYS);
+ executor.writeStatistics();
+ } catch (InterruptedException e) {
+ e.printStackTrace();
+ }
+ }
+The client part
+Now it's time to test our server. In this case, we won't worry much about the
+execution time. The main objective of our test is to check whether the new
+features work well.
+We have split the client part into the following two classes:
+• The ConcurrentClient class: This implements an individual client of the
+server. Each instance of this class has a different username. It makes 100
+queries, 90 of type query, and 10 of type report. The query queries have a
+priority of 5, and the report queries have lower priority (10).
+• The MultipleConcurrentClient class: This measures the behavior of the
+multiple concurrent clients in parallel. We have tested the server with one
+to five concurrent clients. This class also tests the cancellation and the
+stop commands.
+We have included an executor to execute the concurrent requests to the server to
+increase the level of concurrency of the client.
+Chapter 3
+[ 89 ]
+In the following image, you can see the results of the cancellation of tasks:
+In this case, four tasks of the USER_2 user have been canceled.
+The following image shows the final statistics about the number of tasks and the
+execution time of every user:
+The second example – executing periodic
+tasks
+In the previous examples with executors, the tasks were executed once, and they
+were executed as soon as possible. The executor framework includes other executor
+implementation that gives us more flexibility about the execution time of the
+tasks. It's the ScheduledThreadPoolExecutor class that allows us to execute tasks
+periodically and to execute tasks after a delay.
+In this section, you will learn how to execute periodic tasks implementing a RSS
+feed reader. This is a simple case where you need to make the same task (reading
+the news of a RSS feed) at regular intervals. Our example will have the following
+characteristics:
+• Store the RSS sources in a file. We have chosen news about the world
+from some important newspapers, such as The New York Times, the Daily
+News, or The Guardian.
+Getting the Maximum from Executors
+[ 90 ]
+• We sent a Runnable object to the executor per RSS source. Every time the
+executor runs the object, it parses the RSS source and converts it to a list of
+CommonInformationItem objects with the content of the RSS.
+• We use the Producer/Consumer design pattern to write the RSS news
+to disk. The producers will be the tasks of the executor that write every
+CommonInformationItem into a buffer. Only the new items will be stored in
+the buffer. The consumer will be an independent thread that reads the news
+from the buffer and writes them to a disk.
+• The time between the finalization of the execution of a task and its next
+execution will be one minute.
+We also have implemented the advanced version of the example where the time
+between two executions of a task can vary.
+The common parts
+As we mentioned earlier, we read an RSS feed and convert them to a list of objects.
+To parse the RSS file, we treat them as an XML file, and we have implemented a SAX
+(short for Simple API for XML) parser in the RSSDataCapturer class. It parses the
+file and creates a list of CommonInformationItem. This class stores the following
+information for every RSS item:
+• Title: Title of the RSS item.
+• Date: Date of the RSS item.
+• Link: Link to the RSS item.
+• Description: The text of the RSS item.
+• ID: The ID of the RSS item. If the item doesn't include an ID, we calculate it.
+• Source: The name of the RSS source.
+We store the news into a disk using the Producer/Consumer design pattern, so we
+need a buffer to store the news and a Consumer class that, in this case, reads the news
+from the buffer and stores them into the disk.
+We implemented the buffer in the NewsBuffer class. It has two internal attributes:
+• A LinkedBlockingQueue: This is a concurrent data structure with blocking
+operations. If we want to obtain an item from the list and it's empty, the
+thread of the calling method will be blocked until there are elements in the
+list. We will use this structure to store CommonInformationItems.
+• A ConcurrentHashMap: This is a concurrent implementation of a HashMap.
+We will use it to store the IDs of the news items stored in the buffer before.
+Chapter 3
+[ 91 ]
+We will only insert in the buffer the news that wasn't inserted earlier:
+public class NewsBuffer {
+ private LinkedBlockingQueue<CommonInformationItem> buffer;
+ private ConcurrentHashMap<String, String> storedItems;
+ public NewsBuffer() {
+ buffer=new LinkedBlockingQueue<>();
+ storedItems=new ConcurrentHashMap<String, String>();
+ }
+We have two methods in the NewsBuffer class: one to store an item in the buffer
+that checks whether the item has been inserted before, and the other to obtain the
+next item from the buffer. We use the compute() method to insert elements in the
+ConcurrentHashMap. This method receives a lambda expression as a parameter
+with the key and the actual value associated with this key (null if the key has no
+associated value). In our case, we add the item to the buffer it has not been processed
+before. We use the add() and take() methods to to insert, obtain, and delete
+elements from the queue:
+ public void add (CommonInformationItem item) {
+ storedItems.compute(item.getId(), (id, oldSource) -> {
+ if(oldSource == null) {
+ buffer.add(item);
+ return item.getSource();
+ } else {
+ System.out.println("Item "+item.getId()+" has been
+ processed before");
+ return oldSource;
+ }
+ });
+ }
+ public CommonInformationItem get() throws
+ InterruptedException {
+ return buffer.take();
+ }
+The items of the buffer will be written to disk by the NewsWriter class that will be
+executed as an independent thread. It only has an internal attribute that points to the
+NewsBuffer class used in the application:
+public class NewsWriter implements Runnable {
+ private NewsBuffer buffer;
+ public NewsWriter(NewsBuffer buffer) {
+ this.buffer=buffer;
+ }
+Getting the Maximum from Executors
+[ 92 ]
+The run() method of this Runnable object takes CommonInformationItem instances
+from the buffer and saves them to a disk. As we use the blocking method take, if the
+buffer is empty, this thread will be blocked until there are elements in the buffer:
+ public void run() {
+ try {
+ while (!Thread.currentThread().interrupted()) {
+ CommonInformationItem item=buffer.get();
+ Path path=Paths.get
+ ("output\\"+item.getFileName());
+ try (BufferedWriter fileWriter =
+ Files.newBufferedWriter(path,
+ StandardOpenOption.CREATE)) {
+ fileWriter.write(item.toString());
+ } catch (IOException e) {
+ e.printStackTrace();
+ }
+ }
+ } catch (InterruptedException e) {
+ //Normal execution
+ }
+ }
+The basic reader
+The basic reader will use a standard ScheduledThreadPoolExecutor class to
+execute the tasks periodically. We will execute a task per RSS source, and there
+will be one minute between the termination of one execution of a task and the
+commencement of the next execution. These concurrent tasks are implemented in
+the NewsTask class. It has three internal attributes to store the name of the RSS feed,
+its URL, and the NewsBuffer class to store the news:
+public class NewsTask implements Runnable {
+ private String name;
+ private String url;
+ private NewsBuffer buffer;
+ public NewsTask (String name, String url, NewsBuffer buffer) {
+ this.name=name;
+ this.url=url;
+ this.buffer=buffer;
+ }
+Chapter 3
+[ 93 ]
+The run() method of this Runnable object simply parses the RSS feed, gets a list of
+CommonItemInterface instances, and stores them in the buffer. This method will be
+executed in a periodic way. In every execution, the run() method will be executed
+from the beginning to the end:
+ @Override
+ public void run() {
+ System.out.println(name+": Running. " + new Date());
+ RSSDataCapturer capturer=new RSSDataCapturer(name);
+ List<CommonInformationItem> items=capturer.load(url);
+ for (CommonInformationItem item: items) {
+ buffer.add(item);
+ }
+ }
+In this example, we also have implemented another thread to implement the
+initialization of the executor and the tasks and the wait for the finalization of the
+execution. We have named this class NewsSystem. It has three internal attributes
+to store the path to the file with the RSS sources, the buffer to store the news, and
+a CountDownLatch object to control the end of its execution. The CountDownLatch
+class is a synchronization mechanism that allows you to make a thread wait for an
+event. We will detail the utilization of this class in Chapter 9, Diving into Concurrent
+Data Structures and Synchronization Utilities. We have the following code:
+public class NewsSystem implements Runnable {
+ private String route;
+ private ScheduledThreadPoolExecutor executor;
+ private NewsBuffer buffer;
+ private CountDownLatch latch=new CountDownLatch(1);
+ public NewsSystem(String route) {
+ this.route = route;
+ executor = new
+ ScheduledThreadPoolExecutor
+ (Runtime.getRuntime().availableProcessors());
+ buffer=new NewsBuffer();
+ }
+Getting the Maximum from Executors
+[ 94 ]
+In the run() method, we read all the RSS sources, create a NewsTask class for each
+one, and send them to our ScheduledThreadPool executor. We have created the
+executor using the newScheduledThreadPool() method of the Executors class, and
+we send the tasks to it using the scheduleAtFixedDelay() method. We also start
+the NewsWriter instance as a thread. The run() method waits for someone that tells
+it to finish its execution using the await() method of the CountDownLatch class and
+ends the execution of the NewsWriter task and of the ScheduledExecutor.
+ @Override
+ public void run() {
+ Path file = Paths.get(route);
+ NewsWriter newsWriter=new NewsWriter(buffer);
+ Thread t=new Thread(newsWriter);
+ t.start();
+ try (InputStream in = Files.newInputStream(file);
+ BufferedReader reader = new BufferedReader(
+ new InputStreamReader(in))) {
+ String line = null;
+ while ((line = reader.readLine()) != null) {
+ String data[] = line.split(";");
+ NewsTask task = new NewsTask(data[0], data[1],
+ buffer);
+ System.out.println("Task "+task.getName());
+ executor.scheduleWithFixedDelay(task,0, 1,
+ TimeUnit.MINUTES);
+ }
+ } catch (Exception e) {
+ e.printStackTrace();
+ }
+ synchronized (this) {
+ try {
+ latch.await();
+ } catch (InterruptedException e) {
+ e.printStackTrace();
+ }
+ }
+ System.out.println("Shutting down the executor.");
+ executor.shutdown();
+ t.interrupt();
+ System.out.println("The system has finished.");
+ }
+Chapter 3
+[ 95 ]
+We also have implemented the shutdown() method. This method will notify
+the NewsSystem class to end its execution using the countDown() method of the
+CountDownLatch class. This method will wake up the run() method, so it will shut
+down the executor that is running the NewsTask objects:
+ public void shutdown() {
+ latch.countDown();
+ }
+The last class of this example is the Main class that implements the main() method
+of the example. It starts a NewsSystem instance as a thread, waits 10 minutes, and
+notifies the thread of its finalization, and consequently finishes the execution of the
+entire system, as follows:
+public class Main {
+ public static void main(String[] args) {
+ // Creates the System an execute it as a Thread
+ NewsSystem system=new NewsSystem("data\\sources.txt");
+ Thread t=new Thread(system);
+ t.start();
+ // Waits 10 minutes
+ try {
+ TimeUnit.MINUTES.sleep(10);
+ } catch (InterruptedException e) {
+ e.printStackTrace();
+ }
+ // Notifies the finalization of the System
+ (
+ system.shutdown();
+ }
+Getting the Maximum from Executors
+[ 96 ]
+When you execute this example, you see how the different tasks are executed
+in a periodic way and how the news items are written to a disk, as shown in the
+following screenshot:
+The advanced reader
+The basic news reader is an example of utilization of a
+ScheduledThreadPoolExecutor class, but we can go a step further. As occurs with
+ThreadPoolExecutor, we can implement our own ScheduledThreadPoolExecutor
+to obtain a particular behavior. In our case, we want that the delay time of our
+periodic task changes depending on the moment of the day. In this part, you will
+learn how to implement this behavior.
+The first step is to implement a class that tells us the delay between two executions
+of a periodic task. We named this the Timer class. It only has a static method named
+getPeriod(), which returns the number of milliseconds between the end of one
+execution and the start of the next one. This is our implementation, but you can
+make your own:
+public class Timer {
+ public static long getPeriod() {
+ Calendar calendar = Calendar.getInstance();
+ int hour = calendar.get(Calendar.HOUR_OF_DAY);
+Chapter 3
+[ 97 ]
+ if ((hour >= 6) && (hour <= 8)) {
+ return TimeUnit.MILLISECONDS.convert(1,
+ TimeUnit.MINUTES);
+ }
+ if ((hour >= 13) && (hour <= 14)) {
+ return TimeUnit.MILLISECONDS.convert(1,
+ TimeUnit.MINUTES);
+ }
+ if ((hour >= 20) && (hour <= 22)) {
+ return TimeUnit.MILLISECONDS.convert(1,
+ TimeUnit.MINUTES);
+ }
+ return TimeUnit.MILLISECONDS.convert(2, TimeUnit.MINUTES);
+ }
+}
+Next, we have to implement the internal tasks of our executor. When you send a
+Runnable object to an executor, externally, you see that object as the concurrent
+task but the executor converts this object into another task, an instance of the
+FutureTask class, that includes the run() method to execute the task and the
+methods of the Future interface to manage the execution of the task. To implement
+this example, we have to implement a class that extends the FutureTask class,
+and, as we will execute these tasks in a scheduled executor, it has to implement the
+RunnableScheduledFuture interface. This interface provides the getDelay() method
+that returns the time remaining to the next execution of a task. We have implemented
+these internal tasks in the ExecutorTask class. It has four internal attributes:
+• The original RunnableScheduledFuture internal task created by the
+ScheduledThreadPoolExecutor class
+• The scheduled executor that will execute the task
+• The start date of the next execution of the task
+• The name of the RSS feed
+The code for this is as follows:
+public class ExecutorTask<V> extends FutureTask<V> implements
+ RunnableScheduledFuture<V> {
+ private RunnableScheduledFuture<V> task;
+ private NewsExecutor executor;
+Getting the Maximum from Executors
+[ 98 ]
+ private long startDate;
+ private String name;
+ public ExecutorTask(Runnable runnable, V result,
+ RunnableScheduledFuture<V> task,
+ NewsExecutor executor) {
+ super(runnable, result);
+ this.task = task;
+ this.executor = executor;
+ this.name=((NewsTask)runnable).getName();
+ this.startDate=new Date().getTime();
+ }
+We have overridden or implemented different methods in this class. The first one,
+the getDelay() method that, as we told you before, returns the time remaining to
+the next execution of a task in the given unit time:
+ @Override
+ public long getDelay(TimeUnit unit) {
+ long delay;
+ if (!isPeriodic()) {
+ delay = task.getDelay(unit);
+ } else {
+ if (startDate == 0) {
+ delay = task.getDelay(unit);
+ } else {
+ Date now = new Date();
+ delay = startDate - now.getTime();
+ delay = unit.convert(delay,
+ TimeUnit.MILLISECONDS);
+ }
+ }
+ return delay;
+ }
+The next one, the compareTo() method, compares two tasks, taking into account the
+start date of the next execution of the tasks:
+ @Override
+ public int compareTo(Delayed object) {
+ return Long.compare(this.getStartDate(),
+ ((ExecutorTask<V>)object).getStartDate());
+ }
+Chapter 3
+[ 99 ]
+Then, the isPeriodic() method returns true if the task is periodic or false if not:
+ @Override
+ public boolean isPeriodic() {
+ return task.isPeriodic();
+ }
+Finally, we have the run() method that implements the most important part of this
+example. First, we call the runAndReset() method of the FutureTask class. This
+method executes the task and resets its status, so it can be executed again. Then, we
+calculate the start date of the next execution using the Timer class, and finally, we
+have to insert the task again in the queue of the ScheduledThreadPoolExecutor
+class. If we don't do this final step, the task won't be executed again as follows:
+ @Override
+ public void run() {
+ if (isPeriodic() && (!executor.isShutdown())) {
+ super.runAndReset();
+ Date now=new Date();
+ startDate=now.getTime()+Timer.getPeriod();
+ executor.getQueue().add(this);
+ System.out.println("Start Date: "+new
+ Date(startDate));
+ }
+ }
+Once we have the tasks for the executor, we have to implement the
+executor. We have implemented the NewsExecutor class that extends the
+ScheduledThreadPoolExecutor class. We have overridden the decorateTask()
+method. With this method, you can replace the internal task used by the
+scheduled executor. By default, it returns a default implementation of the
+RunnableScheduledFuture interface, but in our case, it will return an instance
+of the ExecutorClass instance:
+public class NewsExecutor extends ScheduledThreadPoolExecutor {
+ public NewsExecutor(int corePoolSize) {
+ super(corePoolSize);
+ }
+ @Override
+ protected <V> RunnableScheduledFuture<V> decorateTask(Runnable
+ runnable,
+ RunnableScheduledFuture<V> task) {
+ ExecutorTask<V> myTask = new ExecutorTask<>(runnable,
+ null, task, this);
+ return myTask;
+ }
+}
+Getting the Maximum from Executors
+[ 100 ]
+We have to implement other versions of the NewsSystem and the Main classes to use
+the NewsExecutor. We have implemented NewsAdvancedSystem and AdvancedMain
+for this purpose.
+Now you can run the advanced news system to see how the delay time between
+executions changes.
+Additional information about executors
+In this chapter, we have extended ThreadPoolExecutor and the
+ScheduledThreadPoolExecutor class and overridden some of their methods.
+But you can override more methods if you want a more particular behavior.
+These are some methods you can override:
+• shutdown(): You must explicitly call this method to end the execution of the
+executor. You can override it to add some code to free additional resources
+used by your own executor.
+• shutdownNow(): The difference between shutdown() and shutdownNow() is
+that the shutdown() method waits for the finalization of all the tasks that are
+waiting in the executor.
+• submit(), invokeall(), or invokeany(): you call these methods to
+send concurrent tasks to the executor. You can override them if you need
+to do some actions before or after a task is inserted in the task queue of
+the executor. Note that adding a custom action before or after the task
+is enqueued is different than adding a custom action before or after
+it's executed, which we did while overriding beforeExecute() and
+afterExecute() methods.
+In the news reader example, we use the scheduleWithFixedDelay() method to
+send tasks to the executor. But the ScheduledThreadPoolExecutor class has other
+methods to execute periodic tasks or tasks after a delay:
+• schedule(): This method executes a task after the given delay. The task is
+executed only once.
+• scheduleAtFixedRate(): This method executes a periodic task with the
+given period. The difference with the scheduleWithFixedDelay() method
+is that in the last one, the delay between two executions goes from the end
+of the first one to the start of the second one and in the first one the delay
+between two executions goes between the start of both.
+Chapter 3
+[ 101 ]
+Summary
+In this chapter, we presented two examples that explored advanced characteristics
+of executors. In the first example, we continued with the client/server example of
+Chapter 2, Managing Lots of Threads – Executors. We implemented our own executor
+extending the ThreadPoolExecutor class to execute the tasks by priority and to
+measure the executing time of the tasks per user. We also included a new command
+to allow the cancellation of tasks.
+In the second example, we explained how to use the ScheduledThreadPoolExecutor
+class to execute periodic tasks. We implemented two versions of a news
+reader. The first one showed how to use the basic functionality of the
+ScheduledExecutorService, and the second one showed how to override the
+behavior of the ScheduledExecutorService class to, for example, change the
+delay time between the two executions of a task.
+In the next chapter, you will learn how to execute Executor tasks that return a
+result. If you extend the Thread class or implement the Runnable interface, the
+run() method doesn't return any result, but the executor framework includes the
+Callable interface that allows you to implement tasks that return a result.
